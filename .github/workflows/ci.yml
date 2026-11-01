@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Smoke test all three modes on the sample
+        run: |
+          python obfuscate_837.py samples/sample_837p.x12 -o /tmp/basic  --seed ci
+          python obfuscate_837.py samples/sample_837p.x12 -o /tmp/expert --seed ci --mode expert
+          python obfuscate_837.py samples/sample_837p.x12 -o /tmp/deid   --mode safe-harbor
+          diff <(tr '~' '\n' < samples/sample_837p.x12 | cut -d'*' -f1) <(tr '~' '\n' < /tmp/deid/sample_837p.x12 | cut -d'*' -f1)

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# PyInstaller build output (attach the .exe to a GitHub Release instead)
+build/
+dist/
+*.spec
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# PHI safety net: never commit real claim files, scrubbed output, or mapping tables.
+# Only the synthetic sample is allowed in.
+*.x12
+*.edi
+*.837
+*.dat
+*.txt
+*_scrubbed/
+mapping*.csv
+*.csv
+!samples/sample_837p.x12
