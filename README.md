@@ -106,6 +106,47 @@ Fine-tuning flags (`--shift-service-dates`, `--date-shift-days N`, `--scramble-c
 turn individual expert-mode behaviours on in basic mode. Safe Harbor ignores them all, by
 design.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    A["Input files / folders"] --> B["collect_inputs<br/>walk dirs, skip non-ISA files"]
+    B --> C["Read bytes, decode latin-1<br/>(byte-preserving)"]
+    C --> D["X12Delims<br/>element / repetition / component / segment<br/>separators from ISA positions 4, 83, 105, 106"]
+    D --> E["split_segments<br/>lossless: keeps whitespace, line endings,<br/>trailing remainder"]
+    E --> F["Pass 1: scan NM1<br/>collect patient and relative name tokens,<br/>all member IDs"]
+    F --> G["Pass 2: HL state machine<br/>HL*20 billing: pass through<br/>HL*22 / *23: route each segment to seg_&lt;TAG&gt; handler"]
+    G --> H["Scrambler<br/>basic / expert: HMAC-SHA256(seed, category, value)<br/>safe-harbor: os.urandom<br/>same-shape replacement, (category, real) -> fake table"]
+    H --> I["Re-join with original delimiters"]
+    I --> J["Leak check<br/>position-by-position diff of every<br/>patient element; exit 2 if any survived"]
+    J --> K["Write output<br/>+ optional mapping CSV"]
+```
+
+### 837 loop coverage
+
+| Loop | Segments | basic | expert | safe-harbor |
+|---|---|---|---|---|
+| ISA / GS / ST / BHT envelope | control numbers, dates | kept | kept | dates reduced to year |
+| 1000A / 1000B submitter, receiver | NM1, PER | kept | kept | kept |
+| 2000A / 2010AA / 2010AB billing, pay-to provider | NM1, N3, N4, REF EI | kept | kept | kept |
+| 2010BB payer | NM1 PR, N3, N4 | kept | kept | kept |
+| 2000B / 2010BA subscriber | NM1 IL, N3, N4, DMG, REF SY/EA, PER | replaced | replaced | replaced, DOB year only |
+| 2000B SBR | SBR03 group number | replaced only if it repeats the member ID | same | always replaced |
+| 2000C / 2010CA patient (dependent) | NM1 QC, N3, N4, DMG, REF, PER | replaced | replaced | replaced, DOB year only |
+| 2300 claim | CLM01, DTP, HI dates, REF 6R/G1/9F/F8/D9, PWK06 | kept | pseudonym / shifted | random / year only |
+| 2300 free text | NTE, K3 | names and 5+ digit runs scrubbed | same | `REDACTED` |
+| 2310 / 2420 providers with an NPI | NM1 ... XX | kept | kept | kept |
+| 2310 / 2420 person providers without an NPI | NM1 (aides, family caregivers) | kept | renamed | renamed |
+| 2310E / 2310F ambulance pick-up, drop-off | NM1 PW / 45, N3, N4 | address replaced | same | same |
+| 2310C service facility without an NPI | NM1 77, N3, N4 | address replaced (patient's home) | same | same |
+| 2320 / 2330A other subscriber | SBR, NM1 IL | replaced | replaced | replaced |
+| 2400 service lines | SV1 / SV2, DTP 472, REF 6R, NTE | codes and charges kept; dates and line IDs per mode | same | same |
+| SE / GE / IEA trailers | counts | kept | kept | kept |
+
+The same handlers serve 837P (005010X222A1) and 837I (005010X223A2); institutional-only
+segments such as CL1 and the HI occurrence and span dates are covered by the generic date
+rules.
+
 ## Design notes
 
 **Delimiter-preserving parser.** The file is split on the terminators declared in the ISA
@@ -145,6 +186,28 @@ reported with its segment number and the process exits with status 2.
 **Payer quirks handled.** `SBR03` repeating the member ID (Indiana Medicaid), fixed member
 ID tails (`--id-keep-tail 2` for IHCP RIDs ending in 99), member IDs with plan suffixes
 (`1234/CHOICE`), `<office>-<sequence>` account numbers.
+
+## Edge cases
+
+| Situation | Behaviour |
+|---|---|
+| File does not start with a 106-byte ISA | Skipped and counted, never rewritten. A directory of mixed files is safe to point at. |
+| Non-standard element, component, repetition or segment separators | Read from the ISA header; nothing is hard-coded to `*`, `:` or `~`. |
+| Line endings, blank lines or whitespace between segments; trailing bytes after the last terminator | Captured as a prefix per segment and a remainder, written back unchanged. |
+| Segments padded with trailing empty elements | `_trim` never drops below the original element count, so `NM1*IL*1*DOE*JANE****MI*123~` keeps its shape. |
+| Bytes outside UTF-8 | File is read and written as latin-1, so every byte value round-trips; untouched content is byte-identical. |
+| Patient billed to two payers, or appearing in several files | Date offset and fake DOB are keyed on name + DOB, not member ID, so they agree everywhere. |
+| Member ID with a plan suffix (`1234/CHOICE`) or a fixed payer tail (`...99`) | Core is pseudonymised, suffix kept; `--id-keep-tail N` preserves the tail. |
+| SBR03 repeating the member ID (Indiana Medicaid) | Replaced with the same fake the NM109 gets, so the file stays internally consistent. |
+| Account numbers of the form `<office>-<sequence>` | Office prefix kept, sequence replaced. |
+| Service facility (NM1 77) without an NPI | Treated as the patient's home: address replaced. With an NPI it is a real facility and is kept. |
+| Date value not in D8 / RD8 / DT / D6 shape | Left unchanged rather than corrupted; the leak check still flags an unchanged DOB. |
+| Shifted DOB would land in the future, or fake age would exceed 89 | Clamped to the past and to 89 years. |
+| Fake name pool contains the real name | `_pick` never returns the real value. |
+| A note ends up containing the fake patient's full name | Rewritten with a different first name (belt and braces). |
+| `-o` resolves to the input file | Refused with an error; use `--in-place` explicitly. |
+| Any patient element survives unchanged | Reported with its segment number; process exits 2. |
+| stdout is a closed pipe (`| head`) | Run continues; files are still written. |
 
 ## Options
 
