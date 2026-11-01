@@ -207,7 +207,7 @@ ID tails (`--id-keep-tail 2` for IHCP RIDs ending in 99), member IDs with plan s
 | A note ends up containing the fake patient's full name | Rewritten with a different first name (belt and braces). |
 | `-o` resolves to the input file | Refused with an error; use `--in-place` explicitly. |
 | Any patient element survives unchanged | Reported with its segment number; process exits 2. |
-| stdout is a closed pipe (`| head`) | Run continues; files are still written. |
+| stdout is a closed pipe (`\| head`) | Run continues; files are still written. |
 
 ## Options
 
